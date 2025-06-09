@@ -2,14 +2,12 @@ import os
 import pandas as pd
 from typing import Dict, Any
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
+from langchain_experimental.tools import PythonAstREPLTool
 from app.core.config import settings
 
 
 class LangChainService:
-    """Service for LangChain-based CSV analysis."""
+    """Service for LangChain-based CSV analysis with actual data operations."""
     
     def __init__(self):
         """Initialize LangChain service."""
@@ -22,80 +20,84 @@ class LangChainService:
             temperature=0.1,
             api_key=settings.openai_api_key
         )
-        
-        # Create analysis chain
-        self.analysis_chain = self._create_analysis_chain()
-    
-    def _create_analysis_chain(self):
-        """Create the analysis chain for CSV data."""
-        
-        # Define the prompt template
-        prompt = ChatPromptTemplate.from_template("""
-You are a data analyst expert. Analyze the following CSV data based on the user's query.
-
-CSV Data Summary:
-{csv_summary}
-
-User Query: {query}
-
-Please provide a comprehensive analysis that includes:
-1. Direct answer to the user's question
-2. Key insights from the data
-3. Relevant statistics or patterns
-4. Recommendations if applicable
-
-Analysis:
-""")
-        
-        # Create the chain
-        chain = (
-            {"csv_summary": RunnablePassthrough(), "query": RunnablePassthrough()}
-            | prompt
-            | self.llm
-            | StrOutputParser()
-        )
-        
-        return chain
     
     async def analyze_csv(self, df: pd.DataFrame, query: str) -> str:
-        """Analyze CSV data based on user query."""
+        """Analyze CSV data with actual data operations using LangChain pandas approach."""
         try:
-            # Get CSV summary
-            csv_summary = self._get_detailed_summary(df)
+            # Create Python tool with access to the DataFrame
+            tool = PythonAstREPLTool(locals={"df": df})
             
-            # Run analysis
-            result = await self.analysis_chain.ainvoke({
-                "csv_summary": csv_summary,
-                "query": query
-            })
+            # Bind tools to LLM
+            llm_with_tools = self.llm.bind_tools([tool], tool_choice=tool.name)
             
-            return result
+            # Create a simple prompt with DataFrame context
+            df_sample = df.head(3).to_markdown()
+            df_info = f"Shape: {df.shape}, Columns: {list(df.columns)}"
+            
+            system_message = f"""You are a data analyst expert. You have access to a pandas DataFrame called 'df'.
+
+            Here is a sample of the data:
+            ```
+            {df_sample}
+            ```
+
+            DataFrame Info:
+            {df_info}
+
+            Given a user question about this data, write Python code to answer it.
+            - Use only pandas and built-in Python libraries
+            - Return ONLY the valid Python code that will give the answer
+            - Make sure your code actually queries/analyzes the real data
+            - Return ONLY the specific calculation result, not the full DataFrame
+            - For correlations, use: df[['column1', 'column2']].corr().iloc[0,1]
+            - For averages by group, use: df.groupby('column')['value'].mean()
+            - For counts, use: df['column'].value_counts()
+            - For searching specific values, first check if they exist: df[df['column'].str.contains('value', case=False, na=False)]
+            - When searching for names or specific values, use .str.contains() instead of exact matching to be more flexible
+            - If searching for a specific person, use: df[df['Name'].str.contains('person_name', case=False, na=False)]['Age'].iloc[0] if len(df[df['Name'].str.contains('person_name', case=False, na=False)]) > 0 else "Person not found"
+
+            Examples:
+            - "What is the average salary by department?" → df.groupby('Department')['Salary'].mean()
+            - "How many people are in each age group?" → df['Age'].value_counts().sort_index()
+            - "What's the correlation between age and salary?" → df[['Age', 'Salary']].corr().iloc[0,1]
+            - "What is the age of John Doe?" → df[df['Name'].str.contains('John Doe', case=False, na=False)]['Age'].iloc[0] if len(df[df['Name'].str.contains('John Doe', case=False, na=False)]) > 0 else "Person not found"
+            """
+            
+            # Use the simple tool calling approach
+            response = await llm_with_tools.ainvoke(
+                f"{system_message}\n\nUser question: {query}"
+            )
+
+            print(response)
+            
+            # Extract and execute the tool call
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                tool_call = response.tool_calls[0]
+                # Access the correct field - it's 'query' not 'code'
+                code_to_execute = tool_call['args']['query']
+                
+                try:
+                    result = tool.invoke(code_to_execute)
+                    
+                    # Format the result for better readability
+                    if isinstance(result, (int, float)):
+                        return f"The result is: {result}"
+                    elif isinstance(result, pd.Series):
+                        return f"Results:\n{result.to_string()}"
+                    elif isinstance(result, pd.DataFrame):
+                        return f"Results:\n{result.to_string()}"
+                    else:
+                        return str(result)
+                        
+                except IndexError as e:
+                    return f"Error: No matching data found. The search returned no results. Please check if the name or criteria you're looking for exists in the dataset."
+                except KeyError as e:
+                    return f"Error: Column '{str(e)}' not found in the dataset. Available columns: {list(df.columns)}"
+                except Exception as e:
+                    return f"Error executing the analysis: {str(e)}. Please try rephrasing your question."
+            else:
+                return "No tool call generated. Please try rephrasing your question."
             
         except Exception as e:
             raise Exception(f"Error during analysis: {str(e)}")
     
-    def _get_detailed_summary(self, df: pd.DataFrame) -> str:
-        """Get a detailed summary of the CSV data for analysis."""
-        summary = f"""
-Dataset Overview:
-- Total rows: {len(df)}
-- Total columns: {len(df.columns)}
-- Column names: {', '.join(df.columns.tolist())}
-
-Data Types:
-{df.dtypes.to_string()}
-
-Statistical Summary:
-{df.describe().to_string()}
-
-Missing Values:
-{df.isnull().sum().to_string()}
-
-Unique Values per Column:
-"""
-        
-        for col in df.columns:
-            unique_count = df[col].nunique()
-            summary += f"- {col}: {unique_count} unique values\n"
-        
-        return summary 
