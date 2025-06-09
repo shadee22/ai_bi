@@ -2,12 +2,13 @@ import pandas as pd
 from typing import Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_experimental.tools import PythonAstREPLTool
 from app.schemas.insights import Card, Chart, InsightsResponse
 from app.core.config import settings
 
 
 class InsightsService:
-    """Service for generating structured insights from CSV data."""
+    """Service for generating structured insights from CSV data using real Python execution."""
     
     def __init__(self):
         """Initialize insights service."""
@@ -22,51 +23,125 @@ class InsightsService:
         )
     
     async def generate_insights(self, df: pd.DataFrame, filename: str) -> InsightsResponse:
-        """Generate structured insights (card and chart) from CSV data."""
+        """Generate structured insights (card and chart) from CSV data using real calculations."""
         try:
-            # Get data summary for context
-            data_summary = self._get_data_summary(df)
+            # Step 1: Use Python execution to get real calculated values
+            calculated_metrics = await self._calculate_real_metrics(df)
             
-            # Create structured output model
-            model_with_structure = self.llm.with_structured_output(InsightsResponse)
-            
-            # Create prompt for insights generation
-            prompt = ChatPromptTemplate.from_template("""
-You are a data analyst expert. Analyze the following CSV data and generate structured insights.
-
-CSV Data Summary:
-{data_summary}
-
-Based on this data, generate:
-1. A CARD insight that shows a key metric (like total sales, average salary, total count, etc.)
-2. A CHART insight that shows a trend or distribution (like daily revenue, department distribution, etc.)
-
-Guidelines:
-- For the CARD: Choose the most meaningful metric from the data, calculate it, and provide a clear title
-- For the CHART: Create a meaningful visualization with appropriate labels and data points
-- Use actual data from the CSV to calculate real values
-- Make the insights relevant and actionable
-- Ensure all numeric values are calculated from the actual data
-
-Generate exactly one card and one chart that would be most valuable for understanding this dataset.
-""")
-            
-            # Generate insights
-            chain = prompt | model_with_structure
-            result = await chain.ainvoke({"data_summary": data_summary})
+            # Step 2: Use structured output to format the insights
+            insights_result = await self._format_insights_with_real_data(df, calculated_metrics)
             
             # Add filename and timestamp
-            result.filename = filename
-            result.timestamp = pd.Timestamp.now().isoformat()
+            insights_result.filename = filename
+            insights_result.timestamp = pd.Timestamp.now().isoformat()
             
-            return result
+            return insights_result
             
         except Exception as e:
             raise Exception(f"Error generating insights: {str(e)}")
     
-    def _get_data_summary(self, df: pd.DataFrame) -> str:
-        """Get a detailed summary of the CSV data for analysis."""
-        summary = f"""
+    async def _calculate_real_metrics(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Use real Python execution to calculate actual metrics from the data."""
+        try:
+            # Create Python tool with access to the DataFrame
+            tool = PythonAstREPLTool(locals={"df": df})
+            
+            # Bind tools to LLM
+            llm_with_tools = self.llm.bind_tools([tool], tool_choice=tool.name)
+            
+            # Create prompt for calculating real metrics
+            df_sample = df.head(3).to_markdown()
+            df_info = f"Shape: {df.shape}, Columns: {list(df.columns)}"
+            
+            system_message = f"""You are a data analyst expert. You have access to a pandas DataFrame called 'df'.
+
+Here is a sample of the data:
+```
+{df_sample}
+```
+
+DataFrame Info:
+{df_info}
+
+Calculate the following key metrics from the REAL data and return them as Python code:
+1. Total count of records
+2. Average of numeric columns (if they exist)
+3. Distribution of categorical columns (if they exist)
+4. Any other meaningful metrics for this dataset
+
+Return ONLY the Python code that calculates these metrics. Use actual pandas operations.
+Examples:
+- Total count: len(df)
+- Average salary: df['Salary'].mean() if 'Salary' in df.columns else None
+- Department distribution: df['Department'].value_counts().to_dict() if 'Department' in df.columns else None
+"""
+            
+            # Get real calculations
+            response = await llm_with_tools.ainvoke(system_message)
+            
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                tool_call = response.tool_calls[0]
+                code_to_execute = tool_call['args']['query']
+                
+                try:
+                    result = tool.invoke(code_to_execute)
+                    return {"calculated_metrics": result, "raw_code": code_to_execute}
+                except Exception as e:
+                    return {"error": str(e), "raw_code": code_to_execute}
+            else:
+                return {"error": "No calculations generated"}
+                
+        except Exception as e:
+            return {"error": f"Calculation error: {str(e)}"}
+    
+    async def _format_insights_with_real_data(self, df: pd.DataFrame, calculated_metrics: Dict[str, Any]) -> InsightsResponse:
+        """Use structured output to format insights with real calculated data."""
+        try:
+            # Create structured output model
+            model_with_structure = self.llm.with_structured_output(InsightsResponse)
+            
+            # Prepare context with real data
+            data_context = self._get_data_context(df, calculated_metrics)
+            
+            # Create prompt for insights generation with real data
+            prompt = ChatPromptTemplate.from_template("""
+You are a data analyst expert. Create structured insights using the REAL calculated data provided.
+
+Data Context:
+{data_context}
+
+Real Calculated Metrics:
+{calculated_metrics}
+
+Based on this REAL data, generate:
+1. A CARD insight that shows a key metric using the actual calculated values
+2. A CHART insight that shows a trend or distribution using the real data
+
+Guidelines:
+- Use the ACTUAL calculated values provided, not estimates
+- For the CARD: Choose the most meaningful metric from the real calculations
+- For the CHART: Create a meaningful visualization with the real data points
+- Ensure all numeric values match the calculated metrics exactly
+- Make the insights relevant and actionable based on the real data
+
+Generate exactly one card and one chart using the real calculated data.
+""")
+            
+            # Generate insights with real data
+            chain = prompt | model_with_structure
+            result = await chain.ainvoke({
+                "data_context": data_context,
+                "calculated_metrics": str(calculated_metrics)
+            })
+            
+            return result
+            
+        except Exception as e:
+            raise Exception(f"Error formatting insights: {str(e)}")
+    
+    def _get_data_context(self, df: pd.DataFrame, calculated_metrics: Dict[str, Any]) -> str:
+        """Get context about the data for insights generation."""
+        context = f"""
 Dataset Overview:
 - Total rows: {len(df)}
 - Total columns: {len(df.columns)}
@@ -75,24 +150,10 @@ Dataset Overview:
 Data Types:
 {df.dtypes.to_string()}
 
-Sample Data (first 10 rows):
-{df.head(10).to_string()}
+Sample Data (first 5 rows):
+{df.head(5).to_markdown()}
 
-Statistical Summary:
-{df.describe().to_string()}
-
-Missing Values:
-{df.isnull().sum().to_string()}
-
-Unique Values per Column:
+Numeric Columns Available: {[col for col in df.columns if df[col].dtype in ['int64', 'float64']]}
+Categorical Columns Available: {[col for col in df.columns if df[col].dtype == 'object']}
 """
-        
-        for col in df.columns:
-            unique_count = df[col].nunique()
-            if unique_count <= 20:  # Only show unique values if not too many
-                unique_values = df[col].unique()[:10]  # Limit to first 10
-                summary += f"- {col}: {unique_count} unique values - {unique_values}\n"
-            else:
-                summary += f"- {col}: {unique_count} unique values\n"
-        
-        return summary 
+        return context 
