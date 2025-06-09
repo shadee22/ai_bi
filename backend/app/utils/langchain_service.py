@@ -85,9 +85,6 @@ Dataset Overview:
 Data Types:
 {df.dtypes.to_string()}
 
-Sample Data (first 10 rows):
-{df.head(10).to_string()}
-
 Statistical Summary:
 {df.describe().to_string()}
 

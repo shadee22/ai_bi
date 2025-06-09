@@ -2,7 +2,7 @@
 
 ## Overview
 
-The CSV Analysis API is a FastAPI-based service that allows users to upload CSV files and perform AI-powered analysis using LangChain and OpenAI. The API provides endpoints for file management and intelligent data analysis.
+The CSV Analysis API is a FastAPI-based service that allows users to upload CSV files and perform AI-powered analysis using LangChain and OpenAI. The API provides endpoints for file management, intelligent data analysis, and structured insights generation.
 
 **Base URL**: `http://localhost:8000`  
 **API Version**: `v1`  
@@ -15,6 +15,7 @@ The CSV Analysis API is a FastAPI-based service that allows users to upload CSV 
   - [Health Check](#health-check)
   - [Upload CSV](#upload-csv)
   - [Analyze CSV](#analyze-csv)
+  - [Generate Insights](#generate-insights)
   - [List Files](#list-files)
   - [Delete File](#delete-file)
 - [Data Models](#data-models)
@@ -141,6 +142,61 @@ curl -X POST "http://localhost:8000/api/v1/csv/analyze" \
 
 ---
 
+### Generate Insights
+
+Generate structured insights (cards and charts) from uploaded CSV file using AI.
+
+**Endpoint**: `POST /api/v1/insights/generate`
+
+**Content-Type**: `application/json`
+
+**Request Body**:
+```json
+{
+  "filename": "sample_data.csv"
+}
+```
+
+**Parameters**:
+- `filename` (string, required): Name of the uploaded CSV file
+
+**Response**:
+```json
+{
+  "card": {
+    "title": "Average Salary Across Departments",
+    "columns_used": ["Salary"],
+    "response_description": "This card displays the average salary of employees across all departments in the dataset.",
+    "value": 72600,
+    "type": "card"
+  },
+  "chart": {
+    "title": "Employee Distribution by Department",
+    "labels": ["Engineering", "Marketing", "Design"],
+    "data": [4.0, 3.0, 3.0],
+    "type": "chart"
+  },
+  "filename": "sample_data.csv",
+  "timestamp": "2025-06-09T14:52:08.017820"
+}
+```
+
+**Example**:
+```bash
+curl -X POST "http://localhost:8000/api/v1/insights/generate" \
+  -H "accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filename": "sample_data.csv"
+  }'
+```
+
+**Error Responses**:
+- `404 Not Found`: File not found
+- `500 Internal Server Error`: Insights generation error or missing OpenAI API key
+
+---
+
 ### List Files
 
 Get a list of all uploaded CSV files.
@@ -214,6 +270,55 @@ curl -X DELETE "http://localhost:8000/api/v1/csv/files/sample_data.csv"
 }
 ```
 
+### InsightsRequest
+```json
+{
+  "filename": "string"
+}
+```
+
+### InsightsResponse
+```json
+{
+  "card": {
+    "title": "string",
+    "columns_used": ["string"],
+    "response_description": "string",
+    "value": "number",
+    "type": "string"
+  },
+  "chart": {
+    "title": "string",
+    "labels": ["string"],
+    "data": ["number"],
+    "type": "string"
+  },
+  "filename": "string",
+  "timestamp": "string"
+}
+```
+
+### Card
+```json
+{
+  "title": "string",
+  "columns_used": ["string"],
+  "response_description": "string",
+  "value": "number",
+  "type": "string"
+}
+```
+
+### Chart
+```json
+{
+  "title": "string",
+  "labels": ["string"],
+  "data": ["number"],
+  "type": "string"
+}
+```
+
 ### ErrorResponse
 ```json
 {
@@ -272,7 +377,16 @@ curl -X POST "http://localhost:8000/api/v1/csv/upload" \
 curl http://localhost:8000/api/v1/csv/files
 ```
 
-3. **Analyze the data**:
+3. **Generate structured insights**:
+```bash
+curl -X POST "http://localhost:8000/api/v1/insights/generate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filename": "data.csv"
+  }'
+```
+
+4. **Analyze the data with custom query**:
 ```bash
 curl -X POST "http://localhost:8000/api/v1/csv/analyze" \
   -H "Content-Type: application/json" \
@@ -296,6 +410,13 @@ with open("data.csv", "rb") as f:
     response = requests.post(f"{base_url}/csv/upload", files=files)
     print("Upload response:", response.json())
 
+# Generate insights
+insights_data = {"filename": "data.csv"}
+response = requests.post(f"{base_url}/insights/generate", json=insights_data)
+insights = response.json()
+print("Card:", insights["card"])
+print("Chart:", insights["chart"])
+
 # Analyze data
 analysis_data = {
     "query": "What is the correlation between age and salary?",
@@ -318,6 +439,22 @@ fetch('http://localhost:8000/api/v1/csv/upload', {
 })
 .then(response => response.json())
 .then(data => console.log('Upload success:', data));
+
+// Generate insights
+fetch('http://localhost:8000/api/v1/insights/generate', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  body: JSON.stringify({
+    filename: 'data.csv'
+  })
+})
+.then(response => response.json())
+.then(data => {
+  console.log('Card insight:', data.card);
+  console.log('Chart insight:', data.chart);
+});
 
 // Analyze data
 fetch('http://localhost:8000/api/v1/csv/analyze', {
@@ -412,6 +549,20 @@ The AI analysis can handle various types of queries:
 - **Comparative Analysis**: Comparing different groups or categories
 - **Insight Generation**: Key findings and recommendations
 - **Data Summarization**: Concise summaries of large datasets
+
+### Structured Insights
+
+The insights generation provides ready-to-use components for frontend applications:
+
+#### Card Insights
+- **Purpose**: Display key metrics and summary statistics
+- **Examples**: Total sales, average salary, customer count, revenue metrics
+- **Usage**: Dashboard cards, KPI displays, summary widgets
+
+#### Chart Insights
+- **Purpose**: Visualize trends, distributions, and comparisons
+- **Examples**: Daily revenue charts, department distributions, time series data
+- **Usage**: Bar charts, line charts, pie charts, trend visualizations
 
 ### Example Queries
 - "What is the average salary by department?"
